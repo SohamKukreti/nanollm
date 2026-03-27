@@ -259,9 +259,15 @@ def raise_for_status(
 
     # Extract human-readable message from the response body
     if isinstance(body, dict):
+        error_val = body.get("error", {})
+        if isinstance(error_val, dict):
+            error_msg = error_val.get("message") or error_val.get("msg")
+        elif isinstance(error_val, str):
+            error_msg = error_val
+        else:
+            error_msg = None
         message = (
-            body.get("error", {}).get("message")
-            or body.get("error", {}).get("msg")
+            error_msg
             or body.get("message")
             or body.get("detail")
             or str(body)

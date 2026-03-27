@@ -84,6 +84,7 @@ def _import_all_providers() -> None:
         "aws",
         "azure",
         "local",
+        "huggingface",
     )
     import importlib
 
