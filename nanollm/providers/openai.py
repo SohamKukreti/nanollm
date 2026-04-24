@@ -48,7 +48,7 @@ class OpenAIProvider(BaseProvider):
         body = super().build_body(model, messages, stream, **kwargs)
 
         # Reasoning / thinking -- reasoning_effort passed through for o-series
-        if reasoning_effort:
+        if reasoning_effort is not None:
             body.update(self.map_thinking(reasoning_effort))
 
         # Structured output -- response_format with json_schema passed through

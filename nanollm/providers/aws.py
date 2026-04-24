@@ -58,14 +58,14 @@ def _get_credentials() -> tuple[str, str, str]:
     # Try boto3 credential chain first (handles IAM roles, profiles, etc.)
     try:
         import botocore.session
-
+    except ImportError:
+        pass
+    else:
         session = botocore.session.get_session()
         creds = session.get_credentials()
         if creds:
             resolved = creds.get_frozen_credentials()
             return resolved.access_key, resolved.secret_key, resolved.token or ""
-    except Exception:
-        pass
 
     access_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
     secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
@@ -110,11 +110,12 @@ def sigv4_headers(
 
     payload_hash = hashlib.sha256(body).hexdigest()
 
-    # Build canonical headers
-    signed_header_names = ["content-type", "host", "x-amz-date"]
+    # Build canonical headers — x-amz-content-sha256 must be signed for Bedrock
+    signed_header_names = ["content-type", "host", "x-amz-content-sha256", "x-amz-date"]
     headers_map = {
         "content-type": "application/json",
         "host": host,
+        "x-amz-content-sha256": payload_hash,
         "x-amz-date": amz_date,
     }
     if session_token:
@@ -182,6 +183,10 @@ class BedrockProvider(BaseProvider):
     _region_env = "AWS_REGION"
     _default_region = "us-east-1"
 
+    # Bedrock converse-stream uses a binary event stream protocol, not SSE.
+    # Fall back to non-streaming until binary event stream parsing is implemented.
+    supports_streaming = False
+
     supported_params = frozenset({
         "temperature", "top_p", "top_k", "max_tokens", "max_completion_tokens",
         "stop", "stop_sequences", "tools", "tool_choice", "reasoning_effort",
@@ -202,7 +207,7 @@ class BedrockProvider(BaseProvider):
         return {"Content-Type": "application/json"}
 
     def build_signed_headers(self, url: str, body: bytes,
-                             **kwargs: Any) -> dict[str, str]:
+                             api_key: str = "", **kwargs: Any) -> dict[str, str]:
         """Build SigV4-signed headers for Bedrock."""
         region = self._get_region()
         return sigv4_headers(
@@ -231,11 +236,13 @@ class BedrockProvider(BaseProvider):
     def build_body(self, model: str, messages: list, stream: bool = False,
                    **kwargs: Any) -> dict:
         """Build body for Bedrock Converse API."""
-        max_tokens = kwargs.pop("max_tokens", None) or kwargs.pop(
-            "max_completion_tokens", 4096)
-        temperature = kwargs.pop("temperature", None)
-        top_p = kwargs.pop("top_p", None)
-        stop = kwargs.pop("stop", None) or kwargs.pop("stop_sequences", None)
+        _mt = kwargs.get("max_tokens")
+        max_tokens = _mt if _mt is not None else kwargs.get("max_completion_tokens", 4096)
+        temperature = kwargs.get("temperature")
+        top_p = kwargs.get("top_p")
+        stop = kwargs.get("stop") or kwargs.get("stop_sequences")
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
 
         # Convert messages
         system_parts, converse_messages = self._convert_messages(messages)
@@ -254,12 +261,9 @@ class BedrockProvider(BaseProvider):
             inference_config["stopSequences"] = stop if isinstance(stop, list) else [stop]
         body["inferenceConfig"] = inference_config
 
-        # Tools
-        tools = kwargs.pop("tools", None)
         if tools:
             body["toolConfig"] = {"tools": self._convert_tools(tools)}
 
-        tool_choice = kwargs.pop("tool_choice", None)
         if tool_choice:
             tc_config = self._convert_tool_choice(tool_choice)
             if "toolConfig" in body:

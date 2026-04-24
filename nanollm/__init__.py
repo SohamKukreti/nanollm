@@ -99,10 +99,12 @@ _default_client: NanoLLM | None = None
 
 
 def _get_default_client() -> NanoLLM:
-    """Lazily create the default client, proxying module-level config."""
+    """Lazily create the default client, syncing module-level config on change."""
     global _default_client
     if _default_client is None:
-        _default_client = NanoLLM(drop_params=drop_params)
+        _default_client = NanoLLM()
+    if _default_client.drop_params != drop_params:
+        _default_client.drop_params = drop_params
     return _default_client
 
 
@@ -179,17 +181,23 @@ def batch_completion(
         model: Provider/model string.
         messages: List of message lists (each is a separate completion call).
         max_workers: Max concurrent threads (default 100).
+        logger_fn: Optional callable invoked with each ModelResponse as it completes.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     def _single(msgs: list[dict]) -> ModelResponse:
-        return completion(
+        result = completion(
             model=model, messages=msgs,
             timeout=timeout, api_key=api_key, base_url=base_url,
             **kwargs,
         )
+        if logger_fn is not None:
+            logger_fn(result)
+        return result
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(messages))) as executor:
+    if not messages:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(messages)))) as executor:
         return list(executor.map(_single, messages))
 
 

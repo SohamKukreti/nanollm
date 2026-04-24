@@ -262,10 +262,10 @@ class TestUsage:
         assert u.prompt_tokens_details is None
         assert u.completion_tokens_details is None
 
-    def test_kwargs_ignored(self):
-        # Should not raise on unknown kwargs
-        u = Usage(extra_field=42)
-        assert u.prompt_tokens == 0
+    def test_unknown_kwargs_raise(self):
+        # Unknown fields should raise TypeError, not be silently discarded
+        with pytest.raises(TypeError):
+            Usage(extra_field=42)
 
 
 # ── FunctionCall ──────────────────────────────────────────────────────

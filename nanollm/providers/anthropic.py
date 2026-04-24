@@ -61,13 +61,21 @@ class AnthropicProvider(BaseProvider):
 
     # -- Body ----------------------------------------------------------------
 
+    _BODY_PARAMS = frozenset({
+        "reasoning_effort", "response_format", "json_schema",
+        "max_tokens", "max_completion_tokens",
+    })
+
     def build_body(self, model: str, messages: list, stream: bool = False,
                    **kwargs: Any) -> dict:
-        reasoning_effort = kwargs.pop("reasoning_effort", None)
-        response_format = kwargs.pop("response_format", None)
-        json_schema = kwargs.pop("json_schema", None)
-        max_tokens = kwargs.pop("max_tokens", None) or kwargs.pop(
-            "max_completion_tokens", None) or self._MAX_TOKENS_DEFAULT
+        reasoning_effort = kwargs.get("reasoning_effort")
+        response_format = kwargs.get("response_format")
+        json_schema = kwargs.get("json_schema")
+        _mt = kwargs.get("max_tokens")
+        max_tokens = (
+            _mt if _mt is not None
+            else kwargs.get("max_completion_tokens", self._MAX_TOKENS_DEFAULT)
+        )
 
         # Extract system + transform messages
         system_content, transformed = self._extract_system(messages)
@@ -82,8 +90,9 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             body["system"] = system_content
 
-        # Map remaining params
-        mapped = self.map_params(**kwargs)
+        # Map remaining params (exclude ones already handled above)
+        remaining = {k: v for k, v in kwargs.items() if k not in self._BODY_PARAMS}
+        mapped = self.map_params(**remaining)
         filtered = self.filter_params(mapped)
         body.update(filtered)
 

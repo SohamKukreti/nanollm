@@ -71,8 +71,8 @@ class GeminiProvider(BaseProvider):
         reasoning_effort = kwargs.pop("reasoning_effort", None)
         response_format = kwargs.pop("response_format", None)
         json_schema = kwargs.pop("json_schema", None)
-        max_tokens = kwargs.pop("max_tokens", None) or kwargs.pop(
-            "max_completion_tokens", None)
+        _mt = kwargs.pop("max_tokens", None)
+        max_tokens = _mt if _mt is not None else kwargs.pop("max_completion_tokens", None)
         temperature = kwargs.pop("temperature", None)
         top_p = kwargs.pop("top_p", None)
         top_k = kwargs.pop("top_k", None)

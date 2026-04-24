@@ -254,7 +254,7 @@ def raise_for_status(
     Does nothing for 2xx status codes.  Extracts the error message from
     common JSON error-body layouts before raising.
     """
-    if 200 <= status_code < 300:
+    if status_code is None or 200 <= status_code < 300:
         return
 
     # Extract human-readable message from the response body

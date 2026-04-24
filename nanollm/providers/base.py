@@ -45,6 +45,11 @@ class BaseProvider:
     # :meth:`filter_params` will drop anything not in this set.
     supported_params: frozenset[str] = frozenset()
 
+    # Set to False on providers whose streaming endpoint uses a non-SSE
+    # binary protocol (e.g. Bedrock event stream).  The client will fall
+    # back to a regular non-streaming request when this is False.
+    supports_streaming: bool = True
+
     # ── API key resolution ───────────────────────────────────────────
 
     def get_api_key(self, api_key: Optional[str] = None) -> str:
@@ -65,6 +70,15 @@ class BaseProvider:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
+
+    def build_signed_headers(self, url: str, body: bytes,
+                             api_key: str = "", **kwargs: Any) -> dict[str, str]:
+        """Build signed headers for a request.
+
+        Default: delegates to build_headers (no request signing).
+        Override in providers that require per-request signing (e.g. AWS SigV4).
+        """
+        return self.build_headers(api_key)
 
     def build_url(
         self,

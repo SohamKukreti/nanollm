@@ -7,8 +7,10 @@ callers never need to catch httpx-specific exceptions.
 
 from __future__ import annotations
 
+import json
+import threading
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 
@@ -16,6 +18,19 @@ from .exceptions import APIConnectionError, Timeout, raise_for_status
 
 # 10-minute default -- long enough for large model responses
 _DEFAULT_TIMEOUT = 600.0
+
+# Module-level sync client with connection pooling (thread-safe per httpx docs)
+_sync_client: httpx.Client | None = None
+_sync_client_lock = threading.Lock()
+
+
+def _get_sync_client() -> httpx.Client:
+    global _sync_client
+    if _sync_client is None or _sync_client.is_closed:
+        with _sync_client_lock:
+            if _sync_client is None or _sync_client.is_closed:
+                _sync_client = httpx.Client(http2=True)
+    return _sync_client
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -25,7 +40,7 @@ def _parse_error_body(response: httpx.Response) -> dict | str:
     """Try to parse the error response as JSON; fall back to raw text."""
     try:
         return response.json()
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         return response.text
 
 
@@ -33,11 +48,8 @@ def _wrap_connection_error(
     exc: Exception,
     provider: str | None,
     model: str | None,
-) -> None:
-    """Re-raise an httpx error as the appropriate NanoLLM exception.
-
-    Always raises -- return type is ``None`` only for the type checker.
-    """
+) -> NoReturn:
+    """Re-raise an httpx error as the appropriate NanoLLM exception."""
     if isinstance(exc, httpx.TimeoutException):
         raise Timeout(
             message=f"Request timed out: {exc}",
@@ -85,13 +97,23 @@ def sync_post(
 ) -> dict:
     """Synchronous JSON POST request.  Returns the parsed JSON body."""
     try:
-        with httpx.Client(timeout=timeout, http2=True) as client:
-            response = client.post(url, headers=headers, json=body)
-            _check_response(response, provider, model)
-            return response.json()
+        client = _get_sync_client()
+        response = client.post(url, headers=headers, json=body, timeout=timeout)
+        _check_response(response, provider, model)
+        return response.json()
     except (httpx.HTTPError, httpx.StreamError) as exc:
         _wrap_connection_error(exc, provider, model)
-        raise  # unreachable, keeps type checker happy
+
+
+# Module-level async client (no lock needed — async is single-threaded per loop)
+_async_client: httpx.AsyncClient | None = None
+
+
+def _get_async_client() -> httpx.AsyncClient:
+    global _async_client
+    if _async_client is None or _async_client.is_closed:
+        _async_client = httpx.AsyncClient(http2=True)
+    return _async_client
 
 
 async def async_post(
@@ -104,13 +126,12 @@ async def async_post(
 ) -> dict:
     """Asynchronous JSON POST request.  Returns the parsed JSON body."""
     try:
-        async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
-            response = await client.post(url, headers=headers, json=body)
-            _check_response(response, provider, model)
-            return response.json()
+        client = _get_async_client()
+        response = await client.post(url, headers=headers, json=body, timeout=timeout)
+        _check_response(response, provider, model)
+        return response.json()
     except (httpx.HTTPError, httpx.StreamError) as exc:
         _wrap_connection_error(exc, provider, model)
-        raise  # unreachable
 
 
 # ── Sync streaming ───────────────────────────────────────────────────
@@ -126,23 +147,23 @@ def sync_stream(
 ) -> Iterator[str]:
     """Synchronous SSE streaming POST.  Yields ``data:`` payloads."""
     try:
-        with httpx.Client(timeout=timeout, http2=True) as client:
-            with client.stream("POST", url, headers=headers, json=body) as response:
-                if response.status_code >= 400:
-                    response.read()
-                    raise_for_status(
-                        response.status_code,
-                        _parse_error_body(response),
-                        provider=provider,
-                        model=model,
-                    )
-                for line in response.iter_lines():
-                    line = line.strip()
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            return
-                        yield data
+        client = _get_sync_client()
+        with client.stream("POST", url, headers=headers, json=body, timeout=timeout) as response:
+            if response.status_code >= 400:
+                response.read()
+                raise_for_status(
+                    response.status_code,
+                    _parse_error_body(response),
+                    provider=provider,
+                    model=model,
+                )
+            for line in response.iter_lines():
+                line = line.strip()
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        return
+                    yield data
     except (httpx.HTTPError, httpx.StreamError) as exc:
         _wrap_connection_error(exc, provider, model)
 
@@ -157,24 +178,24 @@ async def async_stream(
 ) -> AsyncIterator[str]:
     """Asynchronous SSE streaming POST.  Yields ``data:`` payloads."""
     try:
-        async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
-            async with client.stream(
-                "POST", url, headers=headers, json=body
-            ) as response:
-                if response.status_code >= 400:
-                    await response.aread()
-                    raise_for_status(
-                        response.status_code,
-                        _parse_error_body(response),
-                        provider=provider,
-                        model=model,
-                    )
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            return
-                        yield data
+        client = _get_async_client()
+        async with client.stream(
+            "POST", url, headers=headers, json=body, timeout=timeout
+        ) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                raise_for_status(
+                    response.status_code,
+                    _parse_error_body(response),
+                    provider=provider,
+                    model=model,
+                )
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        return
+                    yield data
     except (httpx.HTTPError, httpx.StreamError) as exc:
         _wrap_connection_error(exc, provider, model)

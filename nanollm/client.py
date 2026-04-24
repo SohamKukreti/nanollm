@@ -11,6 +11,7 @@ import json
 import random
 import time
 import asyncio
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Generator, AsyncGenerator, Optional
 
@@ -67,7 +68,12 @@ def _parse_model_string(model: str) -> tuple[str, str]:
     if model_lower.startswith("grok"):
         return "xai", model
 
-    # Default to openai
+    warnings.warn(
+        f"Cannot auto-detect provider for model {model!r}. "
+        "Defaulting to 'openai'. Use 'provider/model' format to be explicit "
+        "(e.g. 'openai/gpt-4o').",
+        stacklevel=3,
+    )
     return "openai", model
 
 
@@ -151,19 +157,24 @@ class NanoLLM:
         Returns:
             ModelResponse with choices, usage, etc.
         """
-        if stream:
-            # Collect all chunks and merge
-            chunks = list(self.stream(
-                model=model, messages=messages,
-                timeout=timeout, api_key=api_key, base_url=base_url,
-                **kwargs,
-            ))
-            return stream_chunk_builder(chunks)
-
         model_str = self._resolve_model(model)
         messages = messages or []
         provider_name, model_name = _parse_model_string(model_str)
         provider = self._get_provider(provider_name)
+
+        if stream:
+            if getattr(provider, "supports_streaming", True):
+                chunks = list(self.stream(
+                    model=model_str, messages=messages,
+                    timeout=timeout, api_key=api_key, base_url=base_url,
+                    **kwargs,
+                ))
+                return stream_chunk_builder(chunks)
+            warnings.warn(
+                f"Provider {provider_name!r} does not support streaming. "
+                "Falling back to a non-streaming request.",
+                stacklevel=2,
+            )
 
         effective_api_key = provider.get_api_key(api_key or self.api_key)
         effective_base_url = base_url or self.base_url
@@ -179,12 +190,10 @@ class NanoLLM:
         if self.drop_params:
             body = {k: v for k, v in body.items() if v is not None}
 
-        # Handle Bedrock SigV4 signing
-        if hasattr(provider, "build_signed_headers"):
-            body_bytes = json.dumps(body).encode("utf-8")
-            headers = provider.build_signed_headers(url, body_bytes, **kwargs)
-        else:
-            headers = provider.build_headers(effective_api_key)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(
+            url, body_bytes, api_key=effective_api_key, **kwargs
+        )
 
         # Request with retry
         data = self._retry_sync(
@@ -214,20 +223,26 @@ class NanoLLM:
         **kwargs: Any,
     ) -> ModelResponse:
         """Async chat completion with built-in retry."""
-        if stream:
-            chunks = []
-            async for chunk in self.astream(
-                model=model, messages=messages,
-                timeout=timeout, api_key=api_key, base_url=base_url,
-                **kwargs,
-            ):
-                chunks.append(chunk)
-            return stream_chunk_builder(chunks)
-
         model_str = self._resolve_model(model)
         messages = messages or []
         provider_name, model_name = _parse_model_string(model_str)
         provider = self._get_provider(provider_name)
+
+        if stream:
+            if getattr(provider, "supports_streaming", True):
+                chunks = []
+                async for chunk in self.astream(
+                    model=model_str, messages=messages,
+                    timeout=timeout, api_key=api_key, base_url=base_url,
+                    **kwargs,
+                ):
+                    chunks.append(chunk)
+                return stream_chunk_builder(chunks)
+            warnings.warn(
+                f"Provider {provider_name!r} does not support streaming. "
+                "Falling back to a non-streaming request.",
+                stacklevel=2,
+            )
 
         effective_api_key = provider.get_api_key(api_key or self.api_key)
         effective_base_url = base_url or self.base_url
@@ -242,11 +257,10 @@ class NanoLLM:
         if self.drop_params:
             body = {k: v for k, v in body.items() if v is not None}
 
-        if hasattr(provider, "build_signed_headers"):
-            body_bytes = json.dumps(body).encode("utf-8")
-            headers = provider.build_signed_headers(url, body_bytes, **kwargs)
-        else:
-            headers = provider.build_headers(effective_api_key)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(
+            url, body_bytes, api_key=effective_api_key, **kwargs
+        )
 
         data = await self._retry_async(
             lambda: async_post(
@@ -295,11 +309,10 @@ class NanoLLM:
         if self.drop_params:
             body = {k: v for k, v in body.items() if v is not None}
 
-        if hasattr(provider, "build_signed_headers"):
-            body_bytes = json.dumps(body).encode("utf-8")
-            headers = provider.build_signed_headers(url, body_bytes, **kwargs)
-        else:
-            headers = provider.build_headers(effective_api_key)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(
+            url, body_bytes, api_key=effective_api_key, **kwargs
+        )
 
         for line in sync_stream(
             url, headers, body,
@@ -349,11 +362,10 @@ class NanoLLM:
         if self.drop_params:
             body = {k: v for k, v in body.items() if v is not None}
 
-        if hasattr(provider, "build_signed_headers"):
-            body_bytes = json.dumps(body).encode("utf-8")
-            headers = provider.build_signed_headers(url, body_bytes, **kwargs)
-        else:
-            headers = provider.build_headers(effective_api_key)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(
+            url, body_bytes, api_key=effective_api_key, **kwargs
+        )
 
         async for line in async_stream(
             url, headers, body,
@@ -391,8 +403,9 @@ class NanoLLM:
         effective_timeout = timeout or self.timeout
 
         url = provider.build_embedding_url(model_name, base_url=effective_base_url)
-        headers = provider.build_headers(effective_api_key)
         body = provider.build_embedding_body(model_name, input or [], **kwargs)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(url, body_bytes, api_key=effective_api_key, **kwargs)
 
         data = self._retry_sync(
             lambda: sync_post(
@@ -427,8 +440,9 @@ class NanoLLM:
         effective_timeout = timeout or self.timeout
 
         url = provider.build_embedding_url(model_name, base_url=effective_base_url)
-        headers = provider.build_headers(effective_api_key)
         body = provider.build_embedding_body(model_name, input or [], **kwargs)
+        body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = provider.build_signed_headers(url, body_bytes, api_key=effective_api_key, **kwargs)
 
         data = await self._retry_async(
             lambda: async_post(

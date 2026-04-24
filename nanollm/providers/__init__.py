@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .base import BaseProvider
 
 _REGISTRY: dict[str, type[BaseProvider]] = {}
+_INSTANCES: dict[str, BaseProvider] = {}
 
 
 def register(name: str):
@@ -40,7 +41,7 @@ def register(name: str):
 
 
 def get_provider(name: str) -> BaseProvider:
-    """Look up a provider by name and return a new instance.
+    """Look up a provider by name, returning a cached singleton instance.
 
     Triggers lazy import of all provider modules on first call so that
     ``@register`` decorators run before lookup.
@@ -48,13 +49,18 @@ def get_provider(name: str) -> BaseProvider:
     if not _REGISTRY:
         _import_all_providers()
 
+    if name in _INSTANCES:
+        return _INSTANCES[name]
+
     cls = _REGISTRY.get(name)
     if cls is None:
         available = ", ".join(sorted(_REGISTRY.keys()))
         raise ValueError(
             f"Unknown provider: {name!r}. Available: {available}"
         )
-    return cls()
+    instance = cls()
+    _INSTANCES[name] = instance
+    return instance
 
 
 def list_providers() -> list[str]:

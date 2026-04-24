@@ -11,6 +11,7 @@ Token-detail objects use the ``_AttrDict`` wrapper so that the
 
 from __future__ import annotations
 
+import json as _json
 import time
 import uuid as _uuid
 from typing import Any, Optional
@@ -39,16 +40,27 @@ class _DictAccessMixin:
         setattr(self, key, value)
 
     def get(self, key: str, default: Any = None) -> Any:
+        if key.startswith("_"):
+            return default
         return getattr(self, key, default)
 
     def __contains__(self, key: str) -> bool:
-        return hasattr(self, key)
+        if key.startswith("_"):
+            return False
+        return getattr(self, key, None) is not None
 
     def keys(self) -> list[str]:
-        return [s for s in self.__slots__ if not s.startswith("_")]
+        seen: set[str] = set()
+        result: list[str] = []
+        for cls in type(self).__mro__:
+            for s in getattr(cls, "__slots__", ()):
+                if s not in seen and not s.startswith("_"):
+                    seen.add(s)
+                    result.append(s)
+        return result
 
     def items(self) -> list[tuple[str, Any]]:
-        return [(k, getattr(self, k, None)) for k in self.keys()]
+        return [(k, v) for k in self.keys() if (v := getattr(self, k, None)) is not None]
 
     def to_dict(self) -> dict:
         """Recursively convert to a plain dict, omitting ``None`` values."""
@@ -74,8 +86,6 @@ class _DictAccessMixin:
 
     def json(self) -> str:
         """Serialize to a JSON string."""
-        import json as _json
-
         return _json.dumps(self.to_dict())
 
     def __repr__(self) -> str:
@@ -166,7 +176,6 @@ class Usage(_DictAccessMixin):
         total_tokens: int = 0,
         prompt_tokens_details: Optional[PromptTokensDetails] = None,
         completion_tokens_details: Optional[CompletionTokensDetails] = None,
-        **kwargs: Any,
     ):
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
