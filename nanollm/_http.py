@@ -90,15 +90,22 @@ def _check_response(
 def sync_post(
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: dict[str, Any] | bytes,
     timeout: float = _DEFAULT_TIMEOUT,
     provider: str | None = None,
     model: str | None = None,
 ) -> dict:
-    """Synchronous JSON POST request.  Returns the parsed JSON body."""
+    """Synchronous JSON POST request.  Returns the parsed JSON body.
+
+    If *body* is bytes, send it as raw content (preserves exact bytes for
+    request signing).  If it is a dict, let httpx serialize it.
+    """
     try:
         client = _get_sync_client()
-        response = client.post(url, headers=headers, json=body, timeout=timeout)
+        if isinstance(body, bytes):
+            response = client.post(url, headers=headers, content=body, timeout=timeout)
+        else:
+            response = client.post(url, headers=headers, json=body, timeout=timeout)
         _check_response(response, provider, model)
         return response.json()
     except (httpx.HTTPError, httpx.StreamError) as exc:
@@ -119,15 +126,22 @@ def _get_async_client() -> httpx.AsyncClient:
 async def async_post(
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: dict[str, Any] | bytes,
     timeout: float = _DEFAULT_TIMEOUT,
     provider: str | None = None,
     model: str | None = None,
 ) -> dict:
-    """Asynchronous JSON POST request.  Returns the parsed JSON body."""
+    """Asynchronous JSON POST request.  Returns the parsed JSON body.
+
+    If *body* is bytes, send it as raw content (preserves exact bytes for
+    request signing).  If it is a dict, let httpx serialize it.
+    """
     try:
         client = _get_async_client()
-        response = await client.post(url, headers=headers, json=body, timeout=timeout)
+        if isinstance(body, bytes):
+            response = await client.post(url, headers=headers, content=body, timeout=timeout)
+        else:
+            response = await client.post(url, headers=headers, json=body, timeout=timeout)
         _check_response(response, provider, model)
         return response.json()
     except (httpx.HTTPError, httpx.StreamError) as exc:
@@ -140,7 +154,7 @@ async def async_post(
 def sync_stream(
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: dict[str, Any] | bytes,
     timeout: float = _DEFAULT_TIMEOUT,
     provider: str | None = None,
     model: str | None = None,
@@ -148,7 +162,8 @@ def sync_stream(
     """Synchronous SSE streaming POST.  Yields ``data:`` payloads."""
     try:
         client = _get_sync_client()
-        with client.stream("POST", url, headers=headers, json=body, timeout=timeout) as response:
+        kwargs = {"content": body} if isinstance(body, bytes) else {"json": body}
+        with client.stream("POST", url, headers=headers, timeout=timeout, **kwargs) as response:
             if response.status_code >= 400:
                 response.read()
                 raise_for_status(
@@ -171,7 +186,7 @@ def sync_stream(
 async def async_stream(
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: dict[str, Any] | bytes,
     timeout: float = _DEFAULT_TIMEOUT,
     provider: str | None = None,
     model: str | None = None,
@@ -179,8 +194,9 @@ async def async_stream(
     """Asynchronous SSE streaming POST.  Yields ``data:`` payloads."""
     try:
         client = _get_async_client()
+        kwargs = {"content": body} if isinstance(body, bytes) else {"json": body}
         async with client.stream(
-            "POST", url, headers=headers, json=body, timeout=timeout
+            "POST", url, headers=headers, timeout=timeout, **kwargs
         ) as response:
             if response.status_code >= 400:
                 await response.aread()
