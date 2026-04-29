@@ -7,6 +7,7 @@ callers never need to catch httpx-specific exceptions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections.abc import AsyncIterator, Iterator
@@ -114,12 +115,18 @@ def sync_post(
 
 # Module-level async client (no lock needed — async is single-threaded per loop)
 _async_client: httpx.AsyncClient | None = None
+_async_client_loop_id: int | None = None
 
 
 def _get_async_client() -> httpx.AsyncClient:
-    global _async_client
-    if _async_client is None or _async_client.is_closed:
+    global _async_client, _async_client_loop_id
+    try:
+        current_loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        current_loop_id = None
+    if _async_client is None or _async_client.is_closed or _async_client_loop_id != current_loop_id:
         _async_client = httpx.AsyncClient(http2=True)
+        _async_client_loop_id = current_loop_id
     return _async_client
 
 

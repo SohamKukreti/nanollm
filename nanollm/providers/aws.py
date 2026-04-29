@@ -227,16 +227,19 @@ class BedrockProvider(BaseProvider):
         access_key = kwargs.get("aws_access_key_id") or os.environ.get("AWS_ACCESS_KEY_ID", "")
         if access_key:
             region = self._get_region()
-            return sigv4_headers(
-                method="POST",
-                url=url,
-                body=body,
-                region=region,
-                service="bedrock",
-                access_key=kwargs.get("aws_access_key_id", ""),
-                secret_key=kwargs.get("aws_secret_access_key", ""),
-                session_token=kwargs.get("aws_session_token", ""),
-            )
+            try:
+                return sigv4_headers(
+                    method="POST",
+                    url=url,
+                    body=body,
+                    region=region,
+                    service="bedrock",
+                    access_key=kwargs.get("aws_access_key_id", ""),
+                    secret_key=kwargs.get("aws_secret_access_key", ""),
+                    session_token=kwargs.get("aws_session_token", ""),
+                )
+            except Exception:
+                pass  # Fall through to bearer token if SigV4 credential resolution fails
 
         # 4. Bearer token from env
         bearer = os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
